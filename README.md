@@ -52,7 +52,7 @@ Cette méthode permet d'enrichir le contexte fourni au LLM avec des informations
 1.  **Cloner le dépôt**
 
     ```bash
-    git clone <votre-repo-url>
+    git clone https://github.com/amarcay/Intro-to-Neo4j-GraphRAG.git
     cd neo
     ```
 
