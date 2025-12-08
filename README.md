@@ -17,6 +17,20 @@ Ce projet est un assistant intelligent (Chatbot) capable de répondre à des que
 -   **Import de Données** : Scripts pour importer des données de films depuis TMDB et OMDb.
 -   **Outils** : L'agent dispose d'outils pour rechercher des informations spécifiques dans la base de connaissances.
 
+## 🛠️ Outils de l'Agent
+
+L'agent dispose d'outils spécifiques pour interroger la base de données :
+
+### 1. `retrieve_movies` (Recherche Sémantique)
+Cet outil utilise le **Vector Search** pour trouver des films basés sur le sens de la requête. Il est idéal pour des questions vagues ou descriptives (ex: "films de science-fiction psychologique").
+
+![Exemple retrieve_movies](example/retrieve_movies.png)
+
+### 2. `search_movies_by_filters` (Recherche Exacte)
+Cet outil permet de filtrer la base de données avec des critères précis (année, réalisateur, genre, note). Il est utilisé quand l'utilisateur donne des contraintes explicites.
+
+![Exemple search_movies_by_filters](example/search_movies_by_filters.png)
+
 ## 🧠 Comment fonctionne le Graph RAG ?
 
 Contrairement à un RAG classique qui se base uniquement sur la similarité vectorielle, le **Graph RAG** combine la recherche sémantique avec la structure relationnelle du graphe. Dans ce projet, nous utilisons une approche hybride :

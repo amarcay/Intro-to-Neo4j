@@ -1,9 +1,7 @@
 from langchain_community.graphs import Neo4jGraph
+from langchain_neo4j import Neo4jVector
 from langchain_core.documents import Document
-from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_graph_retriever import GraphRetriever
-from graph_retriever.strategies import Eager
 
 
 def connect_to_neo4j(url="bolt://localhost:7687", username="neo4j", password="password"):
@@ -18,13 +16,20 @@ def connect_to_neo4j(url="bolt://localhost:7687", username="neo4j", password="pa
     Returns:
         Neo4jGraph: Instance de connexion au graphe
     """
-    graph = Neo4jGraph(
-        url=url,
-        username=username,
-        password=password,
-        refresh_schema=False
-    )
-    return graph
+    try:
+        graph = Neo4jGraph(
+            url=url,
+            username=username,
+            password=password,
+            refresh_schema=False
+        )
+        # Test de connexion
+        graph.query("RETURN 1")
+        print("Connexion Neo4j établie")
+        return graph
+    except Exception as e:
+        print(f"Erreur de connexion Neo4j: {e}")
+        raise
 
 
 def fetch_movies_from_neo4j(graph, limit=500):
@@ -45,8 +50,8 @@ def fetch_movies_from_neo4j(graph, limit=500):
     OPTIONAL MATCH (movie)<-[:ACTED_IN]-(actor:Actor)
     WITH movie, 
          collect(DISTINCT genre.name) AS genres,
-         director.name AS director_name,
-         collect(DISTINCT actor.name) AS actors
+         head(collect(DISTINCT director.name)) AS director_name,
+         collect(DISTINCT actor.name)[0..10] AS actors
     RETURN movie.title AS title, 
            movie.overview AS overview,
            movie.tagline AS tagline,
@@ -57,11 +62,12 @@ def fetch_movies_from_neo4j(graph, limit=500):
            genres,
            director_name,
            actors
+    ORDER BY movie.vote_average DESC
     LIMIT {limit}
     """
     
     results = graph.query(cypher_query)
-    print(f" {len(results)} films récupérés depuis Neo4j")
+    print(f"🎬 {len(results)} films récupérés depuis Neo4j")
     return results
 
 
@@ -79,16 +85,16 @@ def create_document_from_record(record):
     if not overview or str(overview).strip() == "":
         return None
 
-    director = record.get("director_name", "Unknown")
-    actors = record.get("actors", [])
+    # Nettoyage des données
+    director = record.get("director_name") or "Unknown"
+    actors = [a for a in record.get("actors", []) if a]
     main_actors = ", ".join(actors[:5]) if actors else "Unknown"
-    genres = record.get("genres", [])
+    genres = [g for g in record.get("genres", []) if g]
     all_genres = ", ".join(genres) if genres else "Unknown"
-    tagline = record.get("tagline", "")
+    tagline = (record.get("tagline") or "").strip()
     
-    content_parts = [
-        f"Titre : {record.get('title', 'Unknown')}",
-    ]
+    # Construction du contenu enrichi
+    content_parts = [f"Titre : {record.get('title', 'Unknown')}"]
     if tagline:
         content_parts.append(tagline)
     content_parts.extend([
@@ -99,15 +105,21 @@ def create_document_from_record(record):
     ])
     content = "\n\n".join(content_parts)
     
+    # Catégorisation
     rating = float(record.get("rating", 0))
     rating_category = "high" if rating >= 7 else "medium" if rating >= 5 else "low"
     
-    runtime = int(record.get("runtime", 0))
+    runtime = int(record.get("runtime", 0)) if record.get("runtime") else 0
     length_category = "long" if runtime >= 120 else "medium" if runtime >= 90 else "short"
+    
+    # Année de sortie
+    release_date = str(record.get("release_date", ""))
+    year = release_date.split("-")[0] if release_date else "Unknown"
     
     metadata = {
         "title": record.get("title", "Unknown"),
-        "release_date": str(record.get("release_date", "")),
+        "release_date": release_date,
+        "year": year,
         "rating": rating,
         "rating_category": rating_category,
         "runtime": runtime,
@@ -121,7 +133,7 @@ def create_document_from_record(record):
     doc = Document(
         page_content=content,
         metadata=metadata,
-        id=metadata["title"]
+        id=f"movie_{metadata['movie_id']}"
     )
     
     return doc
@@ -144,101 +156,134 @@ def create_documents(results):
         if doc:
             movie_documents.append(doc)
     
-    print(f"📄 {len(movie_documents)} documents créés")
+    print(f"{len(movie_documents)} documents créés")
     return movie_documents
 
-def create_vector_store(documents, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+
+def create_neo4j_vector_store(
+    url="bolt://localhost:7687",
+    username="neo4j",
+    password="password",
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    index_name="movie_embeddings",
+    use_existing=False
+):
     """
-    Crée un vector store à partir des documents.
+    Crée ou charge un Neo4jVector store.
     
     Args:
-        documents: Liste de documents
-        model_name: Nom du modèle d'embeddings
+        url: URL Neo4j
+        username: Nom d'utilisateur
+        password: Mot de passe
+        model_name: Modèle d'embeddings
+        index_name: Nom de l'index
+        use_existing: Si True, utilise l'index existant
         
     Returns:
-        InMemoryVectorStore: Vector store créé
+        Neo4jVector: Vector store Neo4j
     """
-    print("\n Création des embeddings...")
+    print("\n🚀 Initialisation du vector store Neo4j...")
+    
     embeddings = HuggingFaceEmbeddings(model_name=model_name)
     
-    print(" Création du vector store...")
-    vector_store = InMemoryVectorStore.from_documents(
-        documents=documents,
-        embedding=embeddings
-    )
+    # Si on veut utiliser l'index existant
+    if use_existing:
+        print("Chargement depuis l'index existant...")
+        try:
+            vector_store = Neo4jVector.from_existing_index(
+                embedding=embeddings,
+                url=url,
+                username=username,
+                password=password,
+                index_name=index_name,
+            )
+            print("Vector store chargé!")
+            return vector_store
+        except Exception as e:
+            print(f"Index non trouvé, création d'un nouvel index...")
+            use_existing = False
     
-    print(f" {len(documents)} documents ajoutés au vector store!")
-    return vector_store
-
-
-def create_graph_retriever(vector_store, k=10, start_k=5, max_depth=3):
-    """
-    Crée un Graph Retriever pour la recherche.
-    
-    Args:
-        vector_store: Vector store contenant les documents
-        k: Nombre de résultats à retourner
-        start_k: Nombre de résultats initiaux
-        max_depth: Profondeur maximale de recherche
+    # Créer un nouvel index
+    if not use_existing:
+        print("Connexion à Neo4j et récupération des films...")
+        graph = connect_to_neo4j(url, username, password)
         
-    Returns:
-        GraphRetriever: Retriever configuré
-    """
-    print("\n Création du Graph Retriever...")
-    
-    retriever = GraphRetriever(
-        store=vector_store,
-        edges=[
-            ("director", "director"),
-            ("all_genres", "all_genres"),
-            ("rating_category", "rating_category"),
-            ("main_actors", "main_actors")
-        ],
-        strategy=Eager(
-            k=k,
-            start_k=start_k,
-            max_depth=max_depth
+        results = fetch_movies_from_neo4j(graph, limit=500)
+        movie_documents = create_documents(results)
+        
+        if not movie_documents:
+            print("❌ Aucun document trouvé!")
+            return None
+        
+        print(f"\nCréation de l'index vectoriel dans Neo4j...")
+        print(f"   Index: {index_name}")
+        print(f"   Documents: {len(movie_documents)}")
+        
+        # CRÉATION DE L'INDEX VECTORIEL DANS NEO4J
+        vector_store = Neo4jVector.from_documents(
+            documents=movie_documents,
+            embedding=embeddings,
+            url=url,
+            username=username,
+            password=password,
+            index_name=index_name,
+            node_label="MovieVector",
+            embedding_node_property="embedding",
+            text_node_property="text"
         )
-    )
-    
-    print(" Graph Retriever créé!")
-    return retriever
+        
+        print(f"\n Vector store créé avec succès!")
+        print(f" {len(movie_documents)} films indexés dans Neo4j")
+        
+        return vector_store
 
+
+# Variable globale pour le retriever
 _retriever = None
 
-def get_retriever():
+
+def get_retriever(use_existing=True):
     """
-    Retourne le retriever, en le créant si nécessaire.
+    Retourne le retriever Neo4jVector, en le créant si nécessaire.
+    
+    Args:
+        use_existing: Si True, tente de charger l'index existant
+        
+    Returns:
+        Neo4jVector: Vector store configuré
     """
     global _retriever
+    
     if _retriever is None:
-        print(" Initialisation du retriever...")
-        _retriever = main()
+        print("Initialisation du retriever Neo4jVector...")
+        _retriever = create_neo4j_vector_store(use_existing=use_existing)
+    
     return _retriever
+
 
 def main():
     """
     Fonction principale pour exécuter le pipeline complet.
     """
-    print("Démarrage du système de recommandation de films\n")
+    print("🎬 Démarrage du système de recommandation de films\n")
     
-    print(" Connexion à Neo4j...")
-    graph = connect_to_neo4j()
+    retriever = create_neo4j_vector_store(use_existing=False)
     
-    results = fetch_movies_from_neo4j(graph, limit=500)
-    
-    movie_documents = create_documents(results)
-    
-    if len(movie_documents) == 0:
-        print(" Aucun document trouvé!")
-        return None
-    
-    vector_store = create_vector_store(movie_documents)
-    
-    retriever = create_graph_retriever(vector_store)
-    
-    print("\n Système initialisé avec succès!")
-    print(f" Total: {len(movie_documents)} films indexés")
+    if retriever:
+        print("Système initialisé avec succès!")
+        
+        # Test de recherche
+        print("Test de recherche...")
+        results = retriever.similarity_search(
+            "Un film d'action avec des effets spéciaux",
+            k=3
+        )
+        
+        print(f"{len(results)} films trouvés:")
+        for i, doc in enumerate(results, 1):
+            print(f"\n{i}. {doc.metadata['title']}")
+            print(f"   Note: {doc.metadata['rating']}/10")
+            print(f"   Réalisateur: {doc.metadata['director']}")
     
     return retriever
 
