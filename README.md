@@ -99,7 +99,7 @@ Cette méthode permet d'enrichir le contexte fourni au LLM avec des informations
 
 ## 💾 Import des Données
 
-Avant d'utiliser le chatbot, vous devez peupler votre base de données Neo4j. Deux scripts sont disponibles :
+Avant d'utiliser le chatbot, vous devez uploader les données dans la base de données Neo4j. Deux scripts sont disponibles :
 
 -   **Import via TMDB** (Recommandé pour les données récentes et détaillées) :
     ```bash
@@ -110,6 +110,10 @@ Avant d'utiliser le chatbot, vous devez peupler votre base de données Neo4j. De
     ```bash
     python src/app/movie_neo4j.py
     ```
+
+
+### Exemple données importées dans Neo4j
+![Exemple neo4J](example/neo4j_graph.png)
 
 ## ▶️ Démarrage
 
